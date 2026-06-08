@@ -3,23 +3,19 @@ import os
 import bpy
 import bpy.props
 import re
-
-# Add the 'libs' folder to the Python path
-libs_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
-if libs_path not in sys.path:
-    sys.path.append(libs_path)
-
-import requests
+import json
+import urllib.request
 
 from .utilities import *
+
 bl_info = {
     "name": "DeepSeek Blender Assistant",
-    "blender": (2, 82, 0),
+    "blender": (3, 1, 0),
     "category": "Object",
     "author": "Aarya (@gd3kr) - Modified for DeepSeek",
     "version": (2, 1, 0),
     "location": "3D View > UI > DeepSeek Blender Assistant",
-    "description": "Generate Blender Python code using DeepSeek models to perform various tasks.",
+    "description": "Generate Blender Python code using DeepSeek models directly",
     "warning": "",
     "wiki_url": "",
     "tracker_url": "",
@@ -50,7 +46,6 @@ for c in range(0,count):
     z = random.randint(-10,10)
     bpy.ops.mesh.primitive_cube_add(location=(x,y,z))
 ```"""
-
 
 
 class GPT4_OT_DeleteMessage(bpy.types.Operator):
@@ -131,7 +126,7 @@ class GPT4_PT_Panel(bpy.types.Panel):
 
         column.label(text="Enter your message:")
         column.prop(context.scene, "gpt4_chat_input", text="")
-        button_label = "Please wait...(this might take some time)" if context.scene.gpt4_button_pressed else "Execute"
+        button_label = "Please wait..." if context.scene.gpt4_button_pressed else "Execute"
         row = column.row(align=True)
         row.operator("gpt4.send_message", text=button_label)
         row.operator("gpt4.clear_chat", text="Clear Chat")
@@ -165,7 +160,7 @@ class GPT4_OT_Execute(bpy.types.Operator):
             api_key = os.getenv("DEEPSEEK_API_KEY")
         
         if not api_key:
-            self.report({'ERROR'}, "No API key detected. Please set the DeepSeek API key in the addon preferences.")
+            self.report({'ERROR'}, "No API key detected. Please set the DeepSeek API key in addon preferences.")
             return {'CANCELLED'}
 
         context.scene.gpt4_button_pressed = True
@@ -174,7 +169,7 @@ class GPT4_OT_Execute(bpy.types.Operator):
         try:
             blender_code = generate_blender_code(context.scene.gpt4_chat_input, context.scene.gpt4_chat_history, context, system_prompt, addon_name=__name__)
         except Exception as e:
-            self.report({'ERROR'}, f"API Error: {e}")
+            self.report({'ERROR'}, f"API Error: {str(e)[:100]}")
             context.scene.gpt4_button_pressed = False
             return {'CANCELLED'}
 
@@ -182,10 +177,8 @@ class GPT4_OT_Execute(bpy.types.Operator):
         message.type = 'user'
         message.content = context.scene.gpt4_chat_input
 
-        # Clear the chat input field
         context.scene.gpt4_chat_input = ""
 
-    
         if blender_code:
             message = context.scene.gpt4_chat_history.add()
             message.type = 'assistant'
@@ -196,7 +189,7 @@ class GPT4_OT_Execute(bpy.types.Operator):
             try:
                 exec(blender_code, global_namespace)
             except Exception as e:
-                self.report({'ERROR'}, f"Error executing generated code: {e}")
+                self.report({'ERROR'}, f"Error: {str(e)[:100]}")
                 context.scene.gpt4_button_pressed = False
                 return {'CANCELLED'}
 
@@ -220,7 +213,7 @@ class GPT4AddonPreferences(bpy.types.AddonPreferences):
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "api_key")
-        layout.label(text="Get your API key at: https://platform.deepseek.com/api_keys")
+        layout.label(text="Get API key at: https://platform.deepseek.com/api_keys")
 
 def register():
     bpy.utils.register_class(GPT4AddonPreferences)
@@ -229,7 +222,6 @@ def register():
     bpy.utils.register_class(GPT4_OT_ClearChat)
     bpy.utils.register_class(GPT4_OT_ShowCode)
     bpy.utils.register_class(GPT4_OT_DeleteMessage)
-
 
     bpy.types.VIEW3D_MT_mesh_add.append(menu_func)
     init_props()
