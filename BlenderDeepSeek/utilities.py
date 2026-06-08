@@ -1,16 +1,9 @@
 import bpy
 import re
 import os
-import sys
 import json
-
-# Use requests from bundled lib
-libs_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
-if libs_path not in sys.path:
-    sys.path.insert(0, libs_path)
-
-import requests
-
+import urllib.request
+import urllib.error
 
 def get_api_key(context, addon_name):
     preferences = context.preferences
@@ -24,8 +17,8 @@ def init_props():
         name="Model",
         description="Select the model to use",
         items=[
-            ("deepseek-chat", "DeepSeek Chat (default)", "Use DeepSeek Chat model"),
-            ("deepseek-reasoner", "DeepSeek Reasoner (think)", "Use DeepSeek Reasoner model"),
+            ("deepseek-chat", "DeepSeek Chat (fast)", "Use DeepSeek Chat model"),
+            ("deepseek-reasoner", "DeepSeek Reasoner (smart)", "Use DeepSeek Reasoner model"),
         ],
         default="deepseek-chat",
     )
@@ -52,11 +45,11 @@ def generate_blender_code(prompt, chat_history, context, system_prompt, addon_na
     if not api_key:
         api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
-        raise Exception("No API key detected. Please set the DeepSeek API key in the addon preferences.")
+        raise Exception("No API key. Set DeepSeek API Key in addon preferences.")
 
     model = context.scene.gpt4_model
 
-    # Build messages with context from chat history
+    # Build messages
     messages = [{"role": "system", "content": system_prompt}]
     for message in chat_history[-10:]:
         if message.type == "assistant":
@@ -64,16 +57,14 @@ def generate_blender_code(prompt, chat_history, context, system_prompt, addon_na
         else:
             messages.append({"role": message.type.lower(), "content": message.content})
 
-    # Add the current user message
-    messages.append({"role": "user", "content": "Can you please write Blender code for me that accomplishes the following task: " + prompt + "? \n. Do not respond with anything that is not Python code."})
+    messages.append({"role": "user", "content": "Can you please write Blender code for me that accomplishes the following task: " + prompt + "? Do not respond with anything that is not Python code."})
 
-    # Set up request headers for DeepSeek API
+    # Setup request
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
-    # Set up payload
     payload = {
         "model": model,
         "messages": messages,
@@ -81,65 +72,49 @@ def generate_blender_code(prompt, chat_history, context, system_prompt, addon_na
         "max_tokens": 1500,
     }
 
-    # Extra params for deepseek-reasoner (thinking budget)
     if model == "deepseek-reasoner":
         payload["max_completion_tokens"] = 4000
 
     api_url = "https://api.deepseek.com/chat/completions"
 
-    # Make the request to DeepSeek API
-    response = requests.post(
-        api_url,
-        headers=headers,
-        json=payload,
-        stream=True,
-        timeout=120,
-    )
-
-    if not response.ok:
-        error_text = response.text
-        try:
-            err_json = response.json()
-            # Try multiple possible error formats
-            error_msg = (
-                err_json.get("error", {}).get("message")
-                or err_json.get("message")
-                or err_json.get("error")
-                or error_text
-            )
-        except Exception:
-            error_msg = error_text
-        raise Exception(f"DeepSeek API error ({response.status_code}): {error_msg}")
-
+    # Make request using urllib
+    req = urllib.request.Request(api_url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+    
     completion_text = ""
     try:
-        # SSE streaming: each line is "data: {...}" or "data: [DONE]"
-        for line in response.iter_lines():
-            if not line:
-                continue
-            line = line.decode("utf-8", errors="replace")
-            if not line.startswith("data: "):
-                continue
-            data_str = line[6:]  # strip "data: "
-            if data_str == "[DONE]":
-                break
-            try:
-                data = json.loads(data_str)
-                delta = data.get("choices", [{}])[0].get("delta", {})
-                content = delta.get("content", "")
-                if content:
-                    completion_text += content
-                    print(completion_text, flush=True, end="\r")
-            except Exception:
-                continue
+        with urllib.request.urlopen(req, timeout=120) as response:
+            for line in response:
+                line = line.decode('utf-8').strip()
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    break
+                try:
+                    data = json.loads(data_str)
+                    delta = data.get("choices", [{}])[0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        completion_text += content
+                        print(completion_text, flush=True, end="\r")
+                except:
+                    continue
 
-        # Extract code from markdown code blocks
+        # Extract code
         code_blocks = re.findall(r'```(?:python)?(.*?)```', completion_text, re.DOTALL)
         if code_blocks:
             return code_blocks[0].strip()
         return None
+    except urllib.error.HTTPError as e:
+        error_text = e.read().decode('utf-8')
+        try:
+            err_json = json.loads(error_text)
+            error_msg = err_json.get("error", {}).get("message", error_text)
+        except:
+            error_msg = error_text
+        raise Exception(f"DeepSeek API error ({e.code}): {error_msg}")
     except Exception as e:
-        raise Exception(f"Failed to parse response: {e}")
+        raise Exception(f"Failed: {str(e)}")
 
 
 def split_area_to_text_editor(context):
